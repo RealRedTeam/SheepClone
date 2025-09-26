@@ -10,6 +10,16 @@
  
 // Imported WIN32 API
 DECLSPEC_IMPORT WINBASEAPI DWORD WINAPI KERNEL32$GetCurrentProcessId();
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI  ADVAPI32$OpenProcessToken();
+DECLSPEC_IMPORT WINBASEAPI HANDLE WINAPI KERNEL32$GetCurrentProcess();
+DECLSPEC_IMPORT WINBASEAPI DWORD WINAPI KERNEL32$GetLastError();
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$GetTokenInformation();
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI KERNEL32$CloseHandle();
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$LookupPrivilegeNameW();
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$LookupPrivilegeValueW();
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$AdjustTokenPrivileges();
+
+
 
 
 // Define STATUS_SUCCESS if not already defined
@@ -126,28 +136,28 @@ BOOL IsPrivilegeEnabled(LPCWSTR privilegeName)
     BOOL found = FALSE;
 
     // Open process token
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tokenHandle))
+    if (!ADVAPI32$OpenProcessToken(KERNEL32$GetCurrentProcess(), TOKEN_QUERY, &tokenHandle))
     {
-        printf("\t[!] OpenProcessToken failed in IsPrivilegeEnabled! Error: %lu\n", GetLastError());
+        printf("\t[!] OpenProcessToken failed in IsPrivilegeEnabled! Error: %lu\n", KERNEL32$GetLastError());
         return FALSE;
     }
 
     // Get required buffer size
-    GetTokenInformation(tokenHandle, TokenPrivileges, NULL, 0, &bufferSize);
+    ADVAPI32$GetTokenInformation(tokenHandle, TokenPrivileges, NULL, 0, &bufferSize);
     privileges = (PTOKEN_PRIVILEGES)malloc(bufferSize);
     if (!privileges)
     {
         printf("\t[!] Memory allocation failed\n");
-        CloseHandle(tokenHandle);
+        KERNEL32$CloseHandle(tokenHandle);
         return FALSE;
     }
 
     // Get privilege information
-    if (!GetTokenInformation(tokenHandle, TokenPrivileges, privileges, bufferSize, &bufferSize))
+    if (!ADVAPI32$GetTokenInformation(tokenHandle, TokenPrivileges, privileges, bufferSize, &bufferSize))
     {
-        printf("\t[!] GetTokenInformation failed! Error: %lu\n", GetLastError());
+        printf("\t[!] GetTokenInformation failed! Error: %lu\n", KERNEL32$GetLastError());
         free(privileges);
-        CloseHandle(tokenHandle);
+        KERNEL32$CloseHandle(tokenHandle);
         return FALSE;
     }
 
@@ -156,7 +166,7 @@ BOOL IsPrivilegeEnabled(LPCWSTR privilegeName)
     {
         WCHAR name[256];
         DWORD nameSize = sizeof(name) / sizeof(WCHAR);
-        if (LookupPrivilegeNameW(NULL, &privileges->Privileges[i].Luid, name, &nameSize))
+        if (ADVAPI32$LookupPrivilegeNameW(NULL, &privileges->Privileges[i].Luid, name, &nameSize))
         {
             if (_wcsicmp(name, privilegeName) == 0)
             {
@@ -165,7 +175,7 @@ BOOL IsPrivilegeEnabled(LPCWSTR privilegeName)
                 {
                     wprintf(L"\t[i] Privilege '%s' is already enabled (Attributes: 0x%lx)\n", privilegeName, privileges->Privileges[i].Attributes);
                     free(privileges);
-                    CloseHandle(tokenHandle);
+                    KERNEL32$CloseHandle(tokenHandle);
                     return TRUE;
                 }
                 break;
@@ -174,7 +184,7 @@ BOOL IsPrivilegeEnabled(LPCWSTR privilegeName)
     }
 
     free(privileges);
-    CloseHandle(tokenHandle);
+    KERNEL32$CloseHandle(tokenHandle);
     if (!found)
     {
         wprintf(L"\t[!] Privilege '%s' not found in process token\n", privilegeName);
@@ -199,18 +209,18 @@ BOOL EnablePrivilege()
     }
 
     // Open process token
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tokenHandle))
+    if (!ADVAPI32$OpenProcessToken(KERNEL32$GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tokenHandle))
     {
-        printf("\t[!] OpenProcessToken Failed! Error: %lu\n", GetLastError());
+        printf("\t[!] OpenProcessToken Failed! Error: %lu\n", KERNEL32$GetLastError());
         return FALSE;
     }
     printf("\t[i] Got Token handle: %p\n", tokenHandle);
 
     // Lookup privilege value
-    if (!LookupPrivilegeValueW(NULL, privilegeName, &luid))
+    if (!ADVAPI32$LookupPrivilegeValueW(NULL, privilegeName, &luid))
     {
-        wprintf(L"\t[!] LookupPrivilegeValueW Failed for '%s'! Error: %lu\n", privilegeName, GetLastError());
-        CloseHandle(tokenHandle);
+        wprintf(L"\t[!] LookupPrivilegeValueW Failed for '%s'! Error: %lu\n", privilegeName, KERNEL32$GetLastError());
+        KERNEL32$CloseHandle(tokenHandle);
         return FALSE;
     }
 
@@ -221,22 +231,22 @@ BOOL EnablePrivilege()
 
     printf("\t[i] Adjusting token privileges...\n");
     // Adjust token privileges
-    if (!AdjustTokenPrivileges(tokenHandle, FALSE, &tp, 0, NULL, NULL))
+    if (!ADVAPI32$AdjustTokenPrivileges(tokenHandle, FALSE, &tp, 0, NULL, NULL))
     {
-        printf("\t[!] AdjustTokenPrivileges Failed! Error: %lu\n", GetLastError());
-        CloseHandle(tokenHandle);
+        printf("\t[!] AdjustTokenPrivileges Failed! Error: %lu\n", KERNEL32$GetLastError());
+        KERNEL32$CloseHandle(tokenHandle);
         return FALSE;
     }
 
     // Check for not all assigned error
-    if (GetLastError() == ERROR_NOT_ALL_ASSIGNED)
+    if (KERNEL32$GetLastError() == ERROR_NOT_ALL_ASSIGNED)
     {
-        printf("\t[!] Privilege not held by process token! Error: %lu\n", GetLastError());
-        CloseHandle(tokenHandle);
+        printf("\t[!] Privilege not held by process token! Error: %lu\n", KERNEL32$GetLastError());
+        KERNEL32$CloseHandle(tokenHandle);
         return FALSE;
     }
 
-    CloseHandle(tokenHandle);
+    KERNEL32$CloseHandle(tokenHandle);
     wprintf(L"\t[i] Successfully enabled '%s'\n", privilegeName);
     return TRUE;
 }
@@ -245,13 +255,13 @@ BOOL EnablePrivilege()
 BOOL LoadNtOpenProcess() {
     HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
     if (hNtdll == NULL) {
-        printf("\t[!] Failed to get handle to ntdll.dll! Error: %lu\n", GetLastError());
+        printf("\t[!] Failed to get handle to ntdll.dll! Error: %lu\n", KERNEL32$GetLastError());
         return FALSE;
     }
 
     pNtOpenProcess = (PNtOpenProcess)GetProcAddress(hNtdll, "NtOpenProcess");
     if (pNtOpenProcess == NULL) {
-        printf("\t[!] Failed to get address of NtOpenProcess! Error: %lu\n", GetLastError());
+        printf("\t[!] Failed to get address of NtOpenProcess! Error: %lu\n", KERNEL32$GetLastError());
         return FALSE;
     }
     printf("\t[i] Successfully loaded NtOpenProcess from ntdll.dll\n");
