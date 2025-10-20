@@ -1,4 +1,10 @@
 /*
+Authors:
+    https://github.com/nicbrinkley
+    https://github.com/SnoopJesus420
+*/
+
+/*
 * Compile with:
 * cl.exe /c /GS- sheepclone.c /Fosheepclone.x64.o
 */
