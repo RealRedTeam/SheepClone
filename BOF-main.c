@@ -6,7 +6,7 @@ Authors:
 
 /*
 * Compile with:
-* cl.exe /c /GS- sheepclone.c /Fosheepclone.x64.o
+* cl.exe /c /GS- BOF-main.c /Fosheepclone.x64.o
 */
 
 #include <Windows.h>
