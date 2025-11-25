@@ -1,6 +1,5 @@
 /*
 Authors:
-    https://github.com/nicbrinkley
     https://github.com/SnoopJesus420
 */
 
